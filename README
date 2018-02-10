@@ -1,0 +1,15 @@
+Steven Lenoski
+
+Simplified version of netcat. Should work with netcat server. It allows a user to get info from a server and send to the server with TCP or UDP connection.
+
+
+if the -s option is used: the client binds to the ip_address on port 8080
+
+Make the file by:
+make snc
+
+
+RUN BY:
+./snc [-l] [-u] [-s source_ip_address] [hostname] port
+
+
