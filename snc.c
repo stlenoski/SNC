@@ -28,7 +28,7 @@ struct CLI_args {
 	int port;
 	char * sourceName;
 	struct hostent * st;
-	struct hostent * ht;
+	struct hostent * host;
 };
 
 struct arg_struct_UDP {
@@ -60,13 +60,13 @@ struct CLI_args * initCLI_args() {
 	inputArgs->port = 8080;
 	inputArgs->st = NULL;
 	inputArgs->sourceName = NULL;
-	inputArgs->ht = NULL;
+	inputArgs->host = NULL;
 	return inputArgs;
 }
 
+//gets arguments from the cli
 struct CLI_args * getCliArgs(int argc,char * argv[]) {
 	struct CLI_args * inputArgs;
-
 	int c;
 	inputArgs = initCLI_args();
 
@@ -101,15 +101,17 @@ struct CLI_args * getCliArgs(int argc,char * argv[]) {
 		exit(1);
 	}
 
-	// i feel like this can be better
+	//hostname is given and port
 	if(optind < argc - 1) {
-		inputArgs->ht = gethostbyname(argv[optind]);
+		inputArgs->host = gethostbyname(argv[optind]);
 		inputArgs->port = atoi(argv[optind+1]);
 	}
+	//no host name was given
 	else if( optind == argc - 1 && inputArgs->listen == false) {
 		print_error();
 		exit(1);
 	}
+	//listen is enabled
 	else {
 		inputArgs->port = atoi(argv[optind]);
 	}
@@ -117,6 +119,7 @@ struct CLI_args * getCliArgs(int argc,char * argv[]) {
 	return inputArgs;
 }
 
+//returns the sockaddr_in for sockets
 struct sockaddr_in makeSockAddr(short family, unsigned short port, struct in_addr * addr) {
 	struct sockaddr_in sockAddr;
 	sockAddr.sin_family = family;
@@ -129,17 +132,16 @@ struct sockaddr_in makeSockAddr(short family, unsigned short port, struct in_add
 
 
 }
-//create connection
-//int create_connection(int net_socket,int port,char * addr, bool sflag,char * adder) {
-int create_connection(int net_socket,struct CLI_args * cliArgs) {
+//create connection for tcp
+void create_connection(int net_socket,struct CLI_args * cliArgs) {
     struct sockaddr_in server_address;
 	struct hostent * at = NULL;
 	struct sockaddr_in newaddr;
 
-	if(cliArgs->ht == NULL)
+	if(cliArgs->host == NULL)
 		server_address = makeSockAddr(AF_INET, htons(cliArgs->port), NULL);
 	else
-		server_address = makeSockAddr(AF_INET, htons(cliArgs->port), (struct in_addr *)(cliArgs->ht->h_addr_list[0]));
+		server_address = makeSockAddr(AF_INET, htons(cliArgs->port), (struct in_addr *)(cliArgs->host->h_addr_list[0]));
 
 	if(cliArgs->hasSource == true) {
 		at = gethostbyname(cliArgs->sourceName);
@@ -150,7 +152,6 @@ int create_connection(int net_socket,struct CLI_args * cliArgs) {
 	int status = connect(net_socket,(struct sockaddr *)&server_address,sizeof(server_address));
 	if(status == -1)
 		print_internal_error();
-	return status;
 }
 
 //tcp thread recieve
@@ -219,14 +220,13 @@ void * get_Recv_U(void * arg) {
 	return NULL;
 }
 
-
+//cliArgs can't be NULL, creates the connection then spawns the recieve and send threads.
 void tcpClient(struct CLI_args * cliArgs) {
 	int net_socket;
 	pthread_t stdo;
 	pthread_t stdi;
 	int err1;
 	int err2;
-	int status;
 	struct arg_struct * args;
 	args = (struct arg_struct *)malloc(sizeof(struct arg_struct));
 	
@@ -234,32 +234,34 @@ void tcpClient(struct CLI_args * cliArgs) {
 	if(net_socket == -1) 
 		print_internal_error();
 	
-	if(cliArgs->ht != NULL)
-		status = create_connection(net_socket, cliArgs);
+	if(cliArgs->host != NULL)
+		create_connection(net_socket, cliArgs);
 	else
-		status = create_connection(net_socket, cliArgs);
+		create_connection(net_socket, cliArgs);
 
 	//for recieving
 	args->socket = net_socket;
 
-	int errSent = pthread_create(&stdi,NULL,get_Sent,(void *)args);
-	int errRev = pthread_create(&stdo,NULL,get_Recv,(void *)args);
+	int errSent = pthread_create(&stdi, NULL, get_Sent, (void *)args);
+	int errRev = pthread_create(&stdo, NULL, get_Recv, (void *)args);
 	
 	if(errRev != 0 || errSent != 0)
 		print_internal_error();
 
 	// join the threads
-	err2 = pthread_join(stdi,(void*)args);
-	err1 = pthread_join(stdo,(void*)args);
+	err2 = pthread_join(stdi, (void*)args);
+	err1 = pthread_join(stdo, (void*)args);
 	
 	//check if there is an error with join
 	if(err2 != 0 || err1 != 0)
 		print_internal_error();
-	
+
+	free(args);
 	close(net_socket);
 }
 
-
+//cliArgs can't be NULL, binds the socket, listens, then accepts connection,
+// spawns the recieve and send threads
 void tcpServer(struct CLI_args * cliArgs) {
 	int ser_socket;
 	int accepted_socket;
@@ -271,38 +273,39 @@ void tcpServer(struct CLI_args * cliArgs) {
 	struct sockaddr_in server_address;
 	args = (struct arg_struct *)malloc(sizeof(struct arg_struct));
 
-	ser_socket = socket(AF_INET,SOCK_STREAM,0);
+	ser_socket = socket(AF_INET, SOCK_STREAM, 0);
 
 	if(ser_socket == -1)
 		print_internal_error();
 
 	
-	if(cliArgs->ht != NULL)
-		server_address = makeSockAddr(AF_INET,htons(cliArgs->port), (struct in_addr *)cliArgs->ht->h_addr_list[0]); // buz = (struct in_addr *)ht->h_addr_list[0];
+	if(cliArgs->host != NULL)
+		server_address = makeSockAddr(AF_INET, htons(cliArgs->port), (struct in_addr *)cliArgs->host->h_addr_list[0]); 
 	else
-		server_address = makeSockAddr(AF_INET,htons(cliArgs->port), NULL);
+		server_address = makeSockAddr(AF_INET, htons(cliArgs->port), NULL);
 
-	bind(ser_socket,(struct sockaddr *)&server_address,sizeof(server_address));
+	bind(ser_socket, (struct sockaddr *)&server_address, sizeof(server_address));
 	listen(ser_socket,5);
 
-	accepted_socket = accept(ser_socket,NULL,NULL);
+	accepted_socket = accept(ser_socket, NULL, NULL);
 	args->socket = accepted_socket;
-	int errSent = pthread_create(&stdi,NULL,get_Sent,(void *)args);
-	int errRevs = pthread_create(&stdo,NULL,get_Recv,(void *)args);
+	int errSent = pthread_create(&stdi, NULL, get_Sent, (void *)args);
+	int errRevs = pthread_create(&stdo, NULL, get_Recv, (void *)args);
 	
-	if(errRevs != 0 || errSent != -)
+	if(errRevs != 0 || errSent != 0)
 		print_internal_error();
 	
-	err2 = pthread_join(stdi,(void*)args);
-	err1 = pthread_join(stdo,(void*)args);
+	err2 = pthread_join(stdi, (void*)args);
+	err1 = pthread_join(stdo, (void*)args);
 	if(err2 != 0 || err1 != 0)
 		print_internal_error();
 
+	free(args);
 	close(ser_socket);
 
 }
 
-
+//cliArgs can't be NULL, binds if cliArgs has a source on port 8080, then sends clients msg through source.
 void udpClient(struct CLI_args * cliArgs) {
 	int net_socket;
 	pthread_t stdo;
@@ -318,17 +321,17 @@ void udpClient(struct CLI_args * cliArgs) {
 	if(net_socket == -1)
 		print_internal_error();
 
-	
-	if(cliArgs->ht == NULL)
+	//if hostname was given
+	if(cliArgs->host == NULL)
 		server_address = makeSockAddr(AF_INET, htons(cliArgs->port), NULL);
 	else
-		server_address = makeSockAddr(AF_INET, htons(cliArgs->port), (struct in_addr *)cliArgs->ht->h_addr_list[0]);
+		server_address = makeSockAddr(AF_INET, htons(cliArgs->port), (struct in_addr *)cliArgs->host->h_addr_list[0]);
 
 	//to connect to another location 
 	if(cliArgs->hasSource == true) {
 		struct sockaddr_in newaddr;
 		newaddr = makeSockAddr(AF_INET, htons(8080), ((struct in_addr *)cliArgs->st->h_addr_list[0]));
-		if(bind(net_socket,(struct sockaddr *)&newaddr,sizeof(newaddr)) < 0)
+		if(bind(net_socket, (struct sockaddr *)&newaddr, sizeof(newaddr)) < 0)
 			print_internal_error();
 	}
 
@@ -354,8 +357,10 @@ void udpClient(struct CLI_args * cliArgs) {
 	if(err2 != 0 || err1 != 0) {
 		print_internal_error();	
 	}
+	free(arg_udp);
 }
 
+//cliArgs can't be NULL, creates udp sockets, spawns recieve and send threads
 void udpServer(struct CLI_args * cliArgs) {
 	int ser_socket;
 	pthread_t stdo;
@@ -374,15 +379,15 @@ void udpServer(struct CLI_args * cliArgs) {
 	if(ser_socket == -1)
 		print_internal_error();
 	
-	if(cliArgs->ht == NULL)
+	if(cliArgs->host == NULL)
 		server_address = makeSockAddr(AF_INET, htons(cliArgs->port), NULL);
 	else
-		server_address = makeSockAddr(AF_INET, htons(cliArgs->port), (struct in_addr *)cliArgs->ht->h_addr_list[0]);
+		server_address = makeSockAddr(AF_INET, htons(cliArgs->port), (struct in_addr *)cliArgs->host->h_addr_list[0]);
 
 	if(bind(ser_socket,(struct sockaddr *)&server_address,sizeof(server_address))< 0)
 		print_internal_error();
 
-	 get_length = recvfrom(ser_socket,sendUDP,MAX_BUFFER,0,(struct sockaddr *)&client_addr,&addrlen);
+	 get_length = recvfrom(ser_socket,sendUDP, MAX_BUFFER, 0, (struct sockaddr *)&client_addr, &addrlen);
 	 printf("%s",sendUDP);
 	 memset(sendUDP,0,MAX_BUFFER);
 	 arg_udp->socket = ser_socket;
@@ -398,10 +403,13 @@ void udpServer(struct CLI_args * cliArgs) {
 	err1 = pthread_join(stdi,(void*)arg_udp);
 	if(err2 != 0 || err1 != 0)
 		print_internal_error();
+	free(arg_udp);
 }
 
-
-void snc(struct CLI_args * cliArgs) {
+//checks what options was selected, if not valid print error.
+void snc(int argc, char *argv[]) {
+	struct CLI_args * cliArgs;
+	cliArgs = getCliArgs(argc, argv);
 	//tcp client
 	if(cliArgs->listen == false && cliArgs->isUDP == false) {
 		tcpClient(cliArgs);
@@ -428,7 +436,5 @@ void snc(struct CLI_args * cliArgs) {
 
 
 int main(int argc, char *argv[]) {
-	struct CLI_args * cliArgs;
-	cliArgs = getCliArgs(argc, argv);
-	snc(cliArgs);
+	snc(argc, argv);
 }
